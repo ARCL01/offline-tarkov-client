@@ -1,0 +1,5 @@
+# Ignore releases folder
+releases/
+
+# Ignore config file
+config.json
