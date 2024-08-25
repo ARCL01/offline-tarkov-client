@@ -23,7 +23,7 @@ if (-not $reconfigure.IsPresent)
 if (-not (Test-Path .\config.json))
 {
     Write-Warning "Config file doesn't exist, creating default one"
-    '{"first_run":  true,"spt_launcher_path":  "","spt_server_ip":  "","keep_tailscale_on":  "False","is_tailscale_instaled":  "False","show_guide":  "True","is_udp_port_open":  "False"}' >> config.json
+    '{"first_run":  true,"spt_launcher_path":  "","spt_server_ip":  "","keep_tailscale_on":  "False","is_tailscale_instaled":  "False","show_guide":  "True","is_udp_port_open":  "False","auth_key": ""}' >> config.json
     if (Test-Path .\config.json)
     {
         Write-Host "Config file successfuly created`n" -ForegroundColor DarkGreen
@@ -90,7 +90,7 @@ else {
 if ($json.keep_tailscale_on -eq "" -or $json.keep_tailscale_on -ne "$false" -and $json.keep_tailscale_on -ne "$true" -or $reconfigure.Contains("Keep-Tailscale-On") -or $json.first_run)
 {
     $json.keep_tailscale_on = "$false"
-    Write-Warning "It is not specified whether tailscale should continue to run after this program is closed, the default setting is 'disabled'"
+    Write-Warning "It is not specified whether you should stay connected to tailnet when this program is closed, to continue with the default setting 'no', press Enter"
 
     do
     {
@@ -167,54 +167,190 @@ if ($json.is_udp_port_open -eq "" -or $json.is_udp_port_open -eq "$false")
     while($read.ToUpper() -ne "Y" -and $read.ToUpper() -ne "N")
 }
 
-Write-Host "Starting tailscale service..." -ForegroundColor DarkBlue
+Write-Host "Checking for running tailscale service..." -ForegroundColor DarkBlue
+if ($null -ne (Get-Process tailscale-ipn -ErrorAction SilentlyContinue))
+{
+    Write-Host "Tailscale is running`n" -ForegroundColor DarkGreen
+}
+else 
+{
+    Write-Error "Tailscale is not running"
+    Write-Host "Manualy start tailscale..." -ForegroundColor DarkBlue
+    while($null -eq (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)){}
+    Write-Host "Tailscale is running" -ForegroundColor DarkGreen
+}
 Write-Host "Checking for updates..." -ForegroundColor DarkBlue
 winget update -e --id tailscale.tailscale 
-Write-Host "If you haven't logged in yet, the browser will open shortly and you will be asked to login into your tailscale account"
-tailscale up
-Write-Host "Tailscale service is now running." -ForegroundColor DarkGreen
+Write-Host "`nLogging in..." -ForegroundColor DarkBlue
 
-if ($json.show_guide -eq "" -or $json.show_guide -eq "$true")
+if($json.auth_key -eq "")
 {
     do
     {
-        Write-Host "`nTutorial on how to connect to another user will shortly open in you browser."
-        $read = Read-Host "Do you want to see this tutorial the next time you run this script? Y/N"
-
+        Write-Host "Do you want to continue with auth key login method? Y/N"
+        Write-Host "When using this method, you won't need an account."
+        $read = Read-Host
+    
         if ($read.ToUpper() -eq "Y")
         {
-            $json.show_guide = "$True";
+            Write-Host "`nPaste your auth key here:"
+            $read_key = Read-Host
+
+            tailscale logout
+            $output = tailscale up --auth-key $read_key
+            if ($LASTEXITCODE -eq 0)
+            {
+                Write-Host "Key set successfuly" -ForegroundColor DarkGreen
+                $json.auth_key = $read_key;
+            }
+            else
+            {
+                Write-Error "Auth key could not be verified. If you see this message, tailscale is now unusable, to fix this issue: restart tailscale GUI client, run this script again."
+                Write-Host "Manualy exit tailscale..." -ForegroundColor DarkBlue 
+                while($null -ne (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)){}
+                Write-Host "Tailscale exited succefuly`n" -ForegroundColor DarkGreen
+
+                Write-Host "Manualy start tailscale..." -ForegroundColor DarkBlue 
+                while($null -eq (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)){}
+                Write-Host "Tailscale started succefuly`n" -ForegroundColor DarkGreen
+
+                Write-Host "Setting auth key value in config file to default..." -ForegroundColor DarkBlue 
+                $json.auth_key = ""
+                $json | ConvertTo-Json | Out-File .\config.json
+                Write-Host "Value set succefuly`n" -ForegroundColor DarkGreen
+                Write-Host "Run the script again using .\run" -ForegroundColor Yellow
+                exit
+            }
         }
         elseif ($read.ToUpper() -eq "N")
         {
-            $json.show_guide = "$False";
+            Write-Host "Continuing with account method for login..." -ForegroundColor DarkBlue
+            $json.auth_key = "$false";
+            tailscale up
+            Write-Host "Tailscale service is now running." -ForegroundColor DarkGreen
         }
-        $json | ConvertTo-Json | Out-File .\config.json
     }
     while($read.ToUpper() -ne "Y" -and $read.ToUpper() -ne "N")
 }
+elseif ($json.auth_key -eq "$false")
+{
+    tailscale up
+    Write-Host "Tailscale service is now running." -ForegroundColor DarkGreen
+
+    if ($json.show_guide -eq "" -or $json.show_guide -eq "$true")
+    {
+        do
+        {
+            Write-Host "`nTutorial on how to connect to another user will shortly open in you browser."
+            $read = Read-Host "Do you want to see this tutorial the next time you run this script? Y/N"
+
+            if ($read.ToUpper() -eq "Y")
+            {
+                $json.show_guide = "$True";
+            }
+            elseif ($read.ToUpper() -eq "N")
+            {
+                $json.show_guide = "$False";
+            }
+        }
+        while($read.ToUpper() -ne "Y" -and $read.ToUpper() -ne "N")
+    }
+}
+else
+{
+    Write-Host "Checking auth key..." -ForegroundColor DarkBlue
+    tailscale logout
+    $output = tailscale up --auth-key $json.auth_key
+    if ($LASTEXITCODE -eq 0)
+    {
+        Write-Host "Auth key validated successfully" -ForegroundColor DarkGreen
+    }
+    else
+    {
+        Write-Error "Auth key could not be verified. If you see this message, tailscale is now unusable, to fix this issue: restart tailscale GUI client, run this script again."
+        Write-Host "Manualy exit tailscale" -ForegroundColor DarkBlue 
+        while($null -ne (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)){}
+        Write-Host "Tailscale exited succefuly`n" -ForegroundColor DarkGreen
+
+        Write-Host "Manualy start tailscale..." -ForegroundColor DarkBlue 
+        while($null -eq (Get-Process tailscale-ipn -ErrorAction SilentlyContinue)){}
+        Write-Host "Tailscale started succefuly`n" -ForegroundColor DarkGreen
+
+        Write-Host "Setting auth key value in config file to default..." -ForegroundColor DarkBlue 
+        $json.auth_key = ""
+        $json | ConvertTo-Json | Out-File .\config.json
+        Write-Host "Value set succefuly`n" -ForegroundColor DarkGreen
+        Write-Host "Run the script again using .\run" -ForegroundColor Yellow
+        Read-Host "Press Enter to exit..."
+        exit
+    }
+}
+$json | ConvertTo-Json | Out-File .\config.json
+
+# Fika plugin existence check
+Write-Host "`nChecking for existence of fika plugin in /BepInEx/plugins..." -ForegroundColor DarkBlue
+$fika_plugin_path = $json.spt_launcher_path + "/BepInEx/plugins/Fika.Core.dll"
+if (Test-Path -Path $fika_plugin_path)
+{
+    Write-Host "Fika plugin recognized`n" -ForegroundColor DarkGreen
+}
+else {
+    Write-Warning "Fika plugin not found, download it from release section from this github repository and paste it into /BepInEx/plugins"
+    Write-Host "`nhttps://github.com/project-fika/Fika-Plugin`n"
+    Write-Host "Waiting for plugin to be recognized..." -ForegroundColor DarkBlue
+    while (!(Test-Path -Path $fika_plugin_path)){}
+    Write-Host "Fika plugin recognized`n" -ForegroundColor DarkGreen 
+}
+
+# Corter-ModSync plugin existence check
+Write-Host "Checking for existence of Corter-ModSync plugin in /BepInEx/plugins..." -ForegroundColor DarkBlue
+$modsync_plugin_path = $json.spt_launcher_path + "/BepInEx/plugins/Corter-ModSync.dll"
+if (Test-Path -Path $modsync_plugin_path)
+{
+    Write-Host "Corter-ModSync plugin recognized" -ForegroundColor DarkGreen
+}
+else {
+    Write-Warning "Corter-ModSync plugin not found, download it from release section from this github repository and paste it into /BepInEx/plugins"
+    Write-Host "`nhttps://github.com/c-orter/modsync`n"
+    Write-Host "Waiting for plugin to be recognized..." -ForegroundColor DarkBlue
+    while (!(Test-Path -Path $modsync_plugin_path)){}
+    Write-Host "Corter-ModSync plugin recognized" -ForegroundColor DarkGreen 
+}
 
 Write-Host "`nSetting IP address of server inside SPT Launcher config..." -ForegroundColor DarkBlue
-$spt_config_path = $json.spt_launcher_path + "\user\launcher\config.json"
+$spt_config_path = $json.spt_launcher_path + "/user/launcher/config.json"
 # check spt path
 if (-not (Get-Content -Raw $spt_config_path -ErrorAction SilentlyContinue))
 {
-    Write-Error "The path to the SPT folder is invalid. You may have configured the path wrong, try running the script with an parameter: -reconfigure Spt-Launcher-Path `n"
-    exit
+    Write-Host "The path to the SPT launcher config file is invalid, launching spt.lancher to generate the file..." -ForegroundColor DarkBlue
+    $working_dir = Get-Location
+    Set-Location -Path $json.spt_launcher_path
+    .\SPT.Launcher.exe
+    Set-Location -Path $working_dir
+    Write-Host "Waiting for 5 seconds" -ForegroundColor DarkBlue
+    for ($x -eq 0;$x -le 5;$x++)
+    {
+        Write-Host "." -NoNewline
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "`nClosing the launcher..." -ForegroundColor DarkBlue
+    Stop-Process -Name "SPT.Launcher"
 }
 # check ip address
 if (Test-NetConnection $json.spt_server_ip -Port 6969 -ErrorAction SilentlyContinue -InformationLevel Quiet)
 {
-    Write-Host "Server is reachable.`n" -ForegroundColor DarkGreen
+    Write-Host "Server IP is reachable.`n" -ForegroundColor DarkGreen
 }
 else 
 {
-    Write-Error "Server is not reachable. You may have configured the IP wrong, try running the script with an parameter: -reconfigure Spt-Server-Ip"
+    Write-Error "Server IP is not reachable. You may have configured the IP wrong, try running the script with an parameter: -reconfigure Spt-Server-Ip"
+    Read-Host "Press Enter to exit..."
     exit
 }
 
 $spt_json = Get-Content -Raw $spt_config_path | ConvertFrom-Json
 $spt_json.Server.Url = "http://" + $json.spt_server_ip + ":6969"
+$spt_json.IsDevMode = $true
 $spt_json | ConvertTo-Json | Out-File $spt_config_path
 
 Write-Host "Starting SPT Launcher..." -ForegroundColor DarkBlue
@@ -236,13 +372,13 @@ Write-Host "To close this script, press enter..."
 
 if ($json.keep_tailscale_on -ne "$true")
 {
-    Write-Host "You will be logged out from tailscale" -ForegroundColor DarkGray
+    Write-Host "You will be disconnected from tailscale" -ForegroundColor DarkGray
     Read-Host
-    tailscale logout
+    tailscale down
 }
 else 
 {
-    Write-Host "You won't be logged out from tailscale" -ForegroundColor DarkGray
+    Write-Host "You won't be disconnected from tailscale" -ForegroundColor DarkGray
     Read-Host
 }
 exit
