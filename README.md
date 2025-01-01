@@ -12,3 +12,6 @@ This is just a temporary readme, so you can get the script up and running in a m
 5. Open up PowerShell and type ```.\run```
 6. That's it, you can now follow the output of the script
 
+## Known issues
+- Connection tutorial will appear only when using user login.
+- The tutorial will be shown only when the script is run a second time.
